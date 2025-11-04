@@ -1,0 +1,74 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+
+contract VestingWallet is Ownable, ReentrancyGuard {
+    using SafeERC20 for IERC20;
+
+    IERC20 public immutable vlxToken;
+
+    struct VestingSchedule {
+        uint256 start;
+        uint256 cliff;
+        uint256 end;
+        uint256 total;
+        uint256 released;
+    }
+
+    mapping(address => VestingSchedule) public vestingSchedules;
+    event ScheduleAdded(address indexed beneficiary, uint256 start, uint256 cliff, uint256 end, uint256 total);
+
+    // Constructor with your provided addresses
+    constructor() Ownable(0x0665b606B681182117451b5b69bE33D0d6c009E2) {
+        vlxToken = IERC20(0x1f2554684ADB90FD7abCB27D66c54ee8EEc74bB8);
+    }
+
+    function addSchedule(
+        address beneficiary,
+        uint256 start,
+        uint256 cliff,
+        uint256 end,
+        uint256 total
+    ) external onlyOwner nonReentrant {
+        require(beneficiary != address(0), "Zero address");
+        require(end > start, "End before start");
+        require(cliff >= start, "Cliff before start");
+        require(vestingSchedules[beneficiary].total == 0, "Schedule exists");
+        require(total > 0, "Total must be > 0");
+
+        vestingSchedules[beneficiary] = VestingSchedule({
+            start: start,
+            cliff: cliff,
+            end: end,
+            total: total,
+            released: 0
+        });
+
+        vlxToken.safeTransferFrom(msg.sender, address(this), total);
+        emit ScheduleAdded(beneficiary, start, cliff, end, total);
+    }
+
+    function release() external nonReentrant {
+        VestingSchedule storage schedule = vestingSchedules[msg.sender];
+        require(block.timestamp >= schedule.start, "Vesting not started");
+
+        uint256 releasable = _vestedAmount(msg.sender, block.timestamp) - schedule.released;
+        if (releasable > 0) {
+            schedule.released += releasable;
+            vlxToken.safeTransfer(msg.sender, releasable);
+        }
+    }
+
+    function _vestedAmount(address beneficiary, uint256 timestamp) internal view returns (uint256) {
+        VestingSchedule memory schedule = vestingSchedules[beneficiary];
+        if (timestamp < schedule.start) return 0;
+        if (timestamp >= schedule.end) return schedule.total;
+
+        uint256 vested = (timestamp - schedule.start) * schedule.total / (schedule.end - schedule.start);
+        return vested > schedule.total ? schedule.total : vested;
+    }
+}
